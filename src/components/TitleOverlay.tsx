@@ -10,6 +10,9 @@ import {
 } from '../game/types';
 import { MultiplayerLobby } from './MultiplayerLobby';
 
+const onlineMultiplayerEnabled =
+  import.meta.env.VITE_MULTIPLAYER_ENABLED !== 'false';
+
 interface TitleOverlayProps {
   config: StartMatchConfig;
   muted: boolean;
@@ -207,7 +210,9 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
               <label className="block text-xs font-medium text-slate-400 mb-2">
                 Modo de juego
               </label>
-              <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#0B0D12] rounded-lg border border-white/10">
+              <div
+                className={`grid ${onlineMultiplayerEnabled ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 p-1 bg-[#0B0D12] rounded-lg border border-white/10`}
+              >
                 <button
                   type="button"
                   onClick={() => handleModeSwitch('1p')}
@@ -232,18 +237,20 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
                   <Users className="w-4 h-4 shrink-0" />
                   <span>2 Jugadores</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleModeSwitch('online')}
-                  className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs sm:text-sm font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
-                    config.mode === 'online'
-                      ? 'bg-amber-500 text-slate-950'
-                      : 'text-slate-300 hover:text-white hover:bg-white/5'
-                  }`}
-                >
-                  <Globe className="w-4 h-4 shrink-0" />
-                  <span>Multijugador</span>
-                </button>
+                {onlineMultiplayerEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => handleModeSwitch('online')}
+                    className={`flex items-center justify-center gap-1.5 py-2 px-2 text-xs sm:text-sm font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      config.mode === 'online'
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'text-slate-300 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Globe className="w-4 h-4 shrink-0" />
+                    <span>Multijugador</span>
+                  </button>
+                )}
               </div>
             </div>
 
