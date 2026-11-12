@@ -146,3 +146,21 @@ El daño está balanceado para que los combates requieran múltiples impactos es
   $env:NODE_ENV = "production"
   npm start
   ```
+
+## Publicación con GitHub Pages
+
+El workflow `.github/workflows/pages.yml` instala las dependencias con Node.js 24, verifica TypeScript y publica `dist` automáticamente al actualizar `main`. También se puede ejecutar manualmente desde **Actions → Deploy GitHub Pages → Run workflow**.
+
+Para activar el sitio por primera vez, abrir **Settings → Pages → Build and deployment → Source** y seleccionar **GitHub Actions**.
+
+La compilación usa la ruta base que informa GitHub Pages para que JavaScript y CSS carguen correctamente desde la carpeta del repositorio.
+
+En GitHub Pages están disponibles **1 Jugador** y **2 Jugadores en la misma PC**. El modo online requiere el servidor de Node.js y WebSocket, que GitHub Pages no ejecuta. Por eso el workflow compila con `VITE_MULTIPLAYER_ENABLED=false` y oculta esa opción en el menú. Las ejecuciones locales y las publicaciones con servidor mantienen el multijugador online habilitado por defecto.
+
+Para reproducir la compilación de Pages en PowerShell:
+
+```powershell
+$env:VITE_MULTIPLAYER_ENABLED = "false"
+npm run build -- --base=/Chapa-y-pintura/
+Remove-Item Env:VITE_MULTIPLAYER_ENABLED
+```
