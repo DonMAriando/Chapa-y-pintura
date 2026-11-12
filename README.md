@@ -90,7 +90,7 @@ El daño está balanceado para que los combates requieran múltiples impactos es
 ## Cómo ejecutarlo localmente
 
 ### Requisitos previos
-- **Node.js** `v20` o superior (recomendado `v22+`)
+- **Node.js** `v20.19+` (rama 20) o `v22.12+` (recomendado `v22.12+`)
 - **npm** (incluido con Node.js)
 
 ### Pasos para correr el proyecto
