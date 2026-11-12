@@ -139,5 +139,10 @@ El daño está balanceado para que los combates requieran múltiples impactos es
 
 - **Ejecutar el build de producción localmente:**
   ```bash
-  NODE_ENV=production npx tsx server.ts
+  NODE_ENV=production npm start
+  ```
+  En PowerShell:
+  ```powershell
+  $env:NODE_ENV = "production"
+  npm start
   ```
