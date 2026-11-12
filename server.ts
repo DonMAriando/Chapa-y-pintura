@@ -768,6 +768,7 @@ async function startServer(): Promise<void> {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
         watch: null,
       },
       appType: 'spa',
