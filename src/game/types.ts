@@ -1,4 +1,4 @@
-export type GameMode = '1p' | '2p';
+export type GameMode = '1p' | '2p' | 'online';
 
 export type GamePhase =
   | 'title'

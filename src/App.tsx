@@ -8,7 +8,10 @@ import { GameHud } from './components/GameHud';
 import { GameOverModal, PauseModal } from './components/ModalOverlays';
 import { TitleOverlay } from './components/TitleOverlay';
 import { DerbyEngine } from './game/engine';
+import { RoomState, RoomSummary } from './game/multiplayerTypes';
+import { DerbyNetClient, NetConnectionStatus } from './game/netClient';
 import {
+  CarColorId,
   GameHudSnapshot,
   MatchSummary,
   StartMatchConfig,
@@ -28,6 +31,7 @@ const INITIAL_HUD: GameHudSnapshot = {
 export default function App() {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const engineRef = useRef<DerbyEngine | null>(null);
+  const netClientRef = useRef<DerbyNetClient | null>(null);
 
   const [config, setConfig] = useState<StartMatchConfig>({
     mode: '1p',
@@ -40,6 +44,16 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [musicMuted, setMusicMuted] = useState(false);
   const [contextLost, setContextLost] = useState(false);
+
+  // Multiplayer room state
+  const [netStatus, setNetStatus] =
+    useState<NetConnectionStatus>('disconnected');
+  const [playerId, setPlayerId] = useState<string | null>(null);
+  const [playerName, setPlayerName] = useState('Piloto');
+  const [playerColor, setPlayerColor] = useState<CarColorId>('amber');
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [currentRoom, setCurrentRoom] = useState<RoomState | null>(null);
+  const [roomError, setRoomError] = useState<string | null>(null);
 
   useEffect(() => {
     const mount = canvasMountRef.current;
@@ -55,16 +69,73 @@ export default function App() {
       onContextLost: (lost) => {
         setContextLost(lost);
       },
+      onOnlineInput: (input) => {
+        netClientRef.current?.sendInput(input);
+      },
     });
     engineRef.current = engine;
 
+    const net = new DerbyNetClient({
+      onStatusChange: (status) => {
+        setNetStatus(status);
+      },
+      onWelcome: (id, initialRooms) => {
+        setPlayerId(id);
+        setRooms(initialRooms);
+      },
+      onRoomsUpdated: (updatedRooms) => {
+        setRooms(updatedRooms);
+      },
+      onRoomJoined: (room, yourId) => {
+        setPlayerId(yourId);
+        setCurrentRoom(room);
+        setRoomError(null);
+      },
+      onRoomState: (room) => {
+        setCurrentRoom(room);
+        if (room.status === 'lobby') {
+          setSummary(null);
+          engineRef.current?.returnToTitle();
+        }
+      },
+      onRoomLeft: () => {
+        setCurrentRoom(null);
+      },
+      onRoomError: (message) => {
+        setRoomError(message);
+      },
+      onGameStarted: (room, yourCarId, cars) => {
+        setRoomError(null);
+        setSummary(null);
+        setCurrentRoom(room);
+        engineRef.current?.startMultiplayerMatch(cars, yourCarId);
+      },
+      onGameSnapshot: (snapshot) => {
+        engineRef.current?.applyNetworkSnapshot(snapshot);
+      },
+      onCountdownTick: (step, go) => {
+        engineRef.current?.playOnlineCountdownTick(step, go);
+      },
+    });
+    netClientRef.current = net;
+
     return () => {
+      net.dispose();
+      netClientRef.current = null;
       engine.dispose();
       engineRef.current = null;
     };
   }, []);
 
+  // Connect WebSocket when user opens the Multijugador tab
+  useEffect(() => {
+    if (config.mode === 'online') {
+      netClientRef.current?.connect();
+    }
+  }, [config.mode]);
+
   const handleStart = useCallback(() => {
+    if (config.mode === 'online') return;
     setSummary(null);
     engineRef.current?.startMatch(config);
   }, [config]);
@@ -75,9 +146,13 @@ export default function App() {
   }, []);
 
   const handleExitToTitle = useCallback(() => {
+    if (hud.mode === 'online') {
+      netClientRef.current?.leaveRoom();
+      setCurrentRoom(null);
+    }
     setSummary(null);
     engineRef.current?.returnToTitle();
-  }, []);
+  }, [hud.mode]);
 
   const handlePause = useCallback(() => {
     engineRef.current?.setPaused(true);
@@ -102,6 +177,74 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Multiplayer room callbacks
+  const handleChangePlayerColor = useCallback(
+    (colorId: CarColorId) => {
+      setPlayerColor(colorId);
+      if (currentRoom) {
+        netClientRef.current?.updateSeat({ colorId });
+      }
+    },
+    [currentRoom],
+  );
+
+  const handleCreateRoom = useCallback(
+    (roomName: string, maxCars: number) => {
+      setRoomError(null);
+      netClientRef.current?.createRoom(
+        roomName,
+        maxCars,
+        playerName,
+        playerColor,
+      );
+    },
+    [playerName, playerColor],
+  );
+
+  const handleJoinRoom = useCallback(
+    (roomId: string) => {
+      setRoomError(null);
+      netClientRef.current?.joinRoom(roomId, playerName, playerColor);
+    },
+    [playerName, playerColor],
+  );
+
+  const handleJoinByCode = useCallback(
+    (code: string) => {
+      setRoomError(null);
+      netClientRef.current?.joinByCode(code, playerName, playerColor);
+    },
+    [playerName, playerColor],
+  );
+
+  const handleLeaveRoom = useCallback(() => {
+    setRoomError(null);
+    netClientRef.current?.leaveRoom();
+    setCurrentRoom(null);
+  }, []);
+
+  const handleSwitchSlot = useCallback((targetSlotIndex: number) => {
+    netClientRef.current?.updateSeat({ targetSlotIndex });
+  }, []);
+
+  const handleUpdateMaxCars = useCallback((maxCars: number) => {
+    netClientRef.current?.updateMaxCars(maxCars);
+  }, []);
+
+  const handleStartRoomMatch = useCallback(() => {
+    setRoomError(null);
+    netClientRef.current?.startMatch();
+  }, []);
+
+  const handleReturnToRoomLobby = useCallback(() => {
+    setSummary(null);
+    netClientRef.current?.returnToLobby();
+  }, []);
+
+  const isHostInRoom = Boolean(
+    currentRoom && playerId && currentRoom.hostPlayerId === playerId,
+  );
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0B0D12]">
@@ -134,6 +277,24 @@ export default function App() {
           onStart={handleStart}
           onToggleMute={handleToggleMute}
           onToggleMusic={handleToggleMusic}
+          netStatus={netStatus}
+          playerId={playerId}
+          playerName={playerName}
+          playerColor={playerColor}
+          rooms={rooms}
+          currentRoom={currentRoom}
+          roomError={roomError}
+          onChangePlayerName={setPlayerName}
+          onChangePlayerColor={handleChangePlayerColor}
+          onRefreshRooms={() => netClientRef.current?.refreshRooms()}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          onJoinByCode={handleJoinByCode}
+          onLeaveRoom={handleLeaveRoom}
+          onSwitchSlot={handleSwitchSlot}
+          onUpdateMaxCars={handleUpdateMaxCars}
+          onStartRoomMatch={handleStartRoomMatch}
+          onClearError={() => setRoomError(null)}
         />
       )}
 
@@ -164,7 +325,10 @@ export default function App() {
       {hud.phase === 'gameover' && summary && (
         <GameOverModal
           summary={summary}
+          isOnline={hud.mode === 'online'}
+          isHost={isHostInRoom}
           onRestart={handleRestart}
+          onReturnToLobby={handleReturnToRoomLobby}
           onExitToTitle={handleExitToTitle}
         />
       )}

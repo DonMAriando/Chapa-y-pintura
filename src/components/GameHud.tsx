@@ -298,7 +298,12 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {/* Spectator Notice in 2P if one player is wrecked */}
+      {/* Spectator Notice if player is wrecked */}
+      {!is2P && p1?.spectatingName && snapshot.phase === 'playing' && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-[#0E1117]/88 border border-red-500/40 rounded-lg px-3 py-1 text-xs text-red-300 font-medium">
+          Auto hecho polvo · Siguiendo a {p1.spectatingName}
+        </div>
+      )}
       {is2P && p1?.spectatingName && snapshot.phase === 'playing' && (
         <div className="absolute top-16 left-1/4 -translate-x-1/2 bg-[#0E1117]/88 border border-red-500/40 rounded-lg px-3 py-1 text-xs text-red-300 font-medium">
           Auto hecho polvo · Siguiendo a {p1.spectatingName}

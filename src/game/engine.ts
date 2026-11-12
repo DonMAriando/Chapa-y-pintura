@@ -7,7 +7,17 @@ import {
   groundHeightAt,
 } from './arena';
 import { DerbyAudioEngine } from './audio';
-import { buildDerbyCarMesh, resetCarMeshRig } from './carModel';
+import {
+  buildDerbyCarMesh,
+  applyMeshImpactDeformation,
+  resetCarMeshRig,
+  updateCarDamageVisuals,
+} from './carModel';
+import {
+  NetCarState,
+  NetInputPayload,
+  NetStateSnapshot,
+} from './multiplayerTypes';
 import { EffectsPool } from './particles';
 import {
   CarInput,
@@ -41,6 +51,15 @@ const AI_NUMBERS = ['77', '42', '88', '13', '99', '05'];
 
 const _camDesired = new THREE.Vector3();
 const _camLook = new THREE.Vector3();
+const _netHitPos = new THREE.Vector3();
+const _netHitNorm = new THREE.Vector3();
+
+function shortestAngleDiff(current: number, target: number): number {
+  let diff = target - current;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
+}
 
 function detectSoftwareWebGL(): boolean {
   try {
@@ -61,6 +80,7 @@ export interface EngineCallbacks {
   onHudUpdate: (snapshot: GameHudSnapshot) => void;
   onMatchEnd: (summary: MatchSummary) => void;
   onContextLost: (lost: boolean) => void;
+  onOnlineInput?: (input: NetInputPayload) => void;
 }
 
 export class DerbyEngine {
@@ -115,6 +135,16 @@ export class DerbyEngine {
   private cam1LookCurrent = new THREE.Vector3(0, 1, 0);
   private cam2LookCurrent = new THREE.Vector3(0, 1, 0);
 
+  // Online multiplayer runtime state
+  private onlineLocalCarId: string | null = null;
+  private onlineNetTargets = new Map<string, NetCarState>();
+  private onlineBrakingByCarId = new Map<string, boolean>();
+  private onlineCountdownVal = 0;
+  private onlineElapsedSec = 0;
+  private onlineSummarySent = false;
+  private inputSendAccum = 0;
+  private lastSentInputKey = '';
+
   constructor(container: HTMLElement, callbacks: EngineCallbacks) {
     this.container = container;
     this.callbacks = callbacks;
@@ -149,8 +179,8 @@ export class DerbyEngine {
     this.scene.environment = this.envRenderTarget.texture;
     pmrem.dispose();
 
-    this.camera1 = new THREE.PerspectiveCamera(64, w / h, 0.3, 360);
-    this.camera2 = new THREE.PerspectiveCamera(64, w / h, 0.3, 360);
+    this.camera1 = new THREE.PerspectiveCamera(58, w / h, 0.3, 360);
+    this.camera2 = new THREE.PerspectiveCamera(58, w / h, 0.3, 360);
     this.camera1.position.set(0, 18, 42);
     this.camera2.position.set(0, 18, -42);
 
@@ -516,11 +546,229 @@ export class DerbyEngine {
     this.emitHud();
   }
 
+  public startMultiplayerMatch(
+    netCars: NetCarState[],
+    localCarId: string,
+  ): void {
+    this.audio.unlock();
+    this.mode = 'online';
+    this.onlineLocalCarId = localCarId;
+    this.onlineNetTargets.clear();
+    this.onlineBrakingByCarId.clear();
+    this.onlineCountdownVal = 3;
+    this.onlineElapsedSec = 0;
+    this.onlineSummarySent = false;
+    this.inputSendAccum = 0;
+    this.lastSentInputKey = '';
+
+    this.clearCars();
+    this.effects.clearArenaEffects();
+    this.elapsedMatchSeconds = 0;
+    this.hitstopTimer = 0;
+    this.shakeP1 = 0;
+    this.shakeP2 = 0;
+    this.peakImpactKmh = 0;
+    this.totalPartsDetached = 0;
+    this.pendingGameOver = false;
+    this.gameOverDelay = 0;
+    this.callout = null;
+    this.calloutTimer = 0;
+
+    for (const nc of netCars) {
+      const isLocal = nc.id === localCarId;
+      const car = this.createCarEntity({
+        id: nc.id,
+        name: nc.name,
+        numberLabel: nc.numberLabel,
+        colorId: nc.colorId,
+        isPlayer: isLocal,
+        playerSlot: isLocal ? 0 : null,
+        spawnX: nc.x,
+        spawnZ: nc.z,
+        spawnYaw: nc.yaw,
+      });
+      car.y = nc.y;
+      resetCarMeshRig(car.rig);
+      this.cars.push(car);
+      this.onlineNetTargets.set(nc.id, nc);
+    }
+
+    const localCar = this.cars.find((c) => c.id === localCarId) ?? this.cars[0];
+    if (localCar) {
+      this.snapCameraBehind(this.camera1, this.cam1LookCurrent, localCar);
+    }
+
+    this.phase = 'countdown';
+    this.audio.setMusicMode('battle');
+    this.updateCameraAspects();
+    this.emitHud();
+  }
+
+  public playOnlineCountdownTick(_step: number, go: boolean): void {
+    this.audio.playCountdownTone(go);
+  }
+
+  public applyNetworkSnapshot(snapshot: NetStateSnapshot): void {
+    if (this.mode !== 'online' || this.phase === 'title') return;
+
+    this.onlineCountdownVal = snapshot.countdownValue;
+    this.onlineElapsedSec = snapshot.elapsedSeconds;
+    if (snapshot.callout) {
+      this.callout = snapshot.callout;
+      this.calloutTimer = 1.9;
+    }
+
+    // Sync nitro pads
+    for (
+      let i = 0;
+      i < this.arena.nitroPads.length && i < snapshot.nitroPadCooldowns.length;
+      i++
+    ) {
+      this.arena.nitroPads[i].cooldown = snapshot.nitroPadCooldowns[i];
+    }
+
+    // Sync authoritative car states & damage visuals
+    for (const nc of snapshot.cars) {
+      this.onlineNetTargets.set(nc.id, nc);
+      this.onlineBrakingByCarId.set(nc.id, nc.braking);
+      const car = this.cars.find((c) => c.id === nc.id);
+      if (!car) continue;
+
+      const prevHp = car.hp;
+      const prevWrecked = car.wrecked;
+
+      car.hp = nc.hp;
+      car.nitro = nc.nitro;
+      car.isBoosting = nc.isBoosting;
+      car.isDrifting = nc.isDrifting;
+      car.wrecked = nc.wrecked;
+      car.kills = nc.kills;
+      car.damageDealt = nc.damageDealt;
+      car.zones = { ...nc.zones };
+      car.grounded = nc.grounded;
+
+      // Sync attached parts visibility
+      const keepSet = new Set(nc.attachedParts);
+      for (const part of Array.from(car.attachedParts)) {
+        if (!keepSet.has(part)) {
+          car.attachedParts.delete(part);
+          car.rig.detachableParts[part].visible = false;
+        }
+      }
+
+      if (Math.abs(prevHp - car.hp) > 0.2 || prevWrecked !== car.wrecked) {
+        updateCarDamageVisuals(car.rig, car.hp / 100, car.wrecked);
+      }
+    }
+
+    // Process server collision/destruction impacts for sparks, crumple, debris & metallic audio
+    let maxImpactStrength = 0;
+    let anyDetach = false;
+    let anyWreck = false;
+
+    for (const ev of snapshot.impacts) {
+      if (ev.sparkCount > 0) {
+        this.effects.emitSparks(
+          ev.hitX,
+          ev.hitY,
+          ev.hitZ,
+          ev.normX,
+          ev.normZ,
+          ev.sparkCount,
+        );
+      }
+      maxImpactStrength = Math.max(maxImpactStrength, ev.strength);
+
+      const victim = this.cars.find((c) => c.id === ev.victimId);
+      if (victim && ev.damage > 0) {
+        _netHitPos.set(ev.hitX, ev.hitY, ev.hitZ);
+        _netHitNorm.set(ev.normX, 0.08, ev.normZ).normalize();
+        applyMeshImpactDeformation(
+          victim.rig,
+          _netHitPos,
+          _netHitNorm,
+          THREE.MathUtils.clamp(ev.damage / 15, 0.42, 1.25),
+          victim.hp / 100,
+        );
+      }
+
+      if (ev.detachedParts.length > 0 && victim) {
+        anyDetach = true;
+        for (const part of ev.detachedParts) {
+          victim.attachedParts.delete(part);
+          victim.rig.detachableParts[part].visible = false;
+          this.effects.spawnDetachedPart(
+            part,
+            victim.colorOpt.primaryHex,
+            victim.colorOpt.stripeHex,
+            victim.x,
+            victim.y + 1.2,
+            victim.z,
+            victim.vx * 0.55 + ev.normX * 8 + (Math.random() - 0.5) * 4,
+            5 + Math.random() * 4,
+            victim.vz * 0.55 + ev.normZ * 8 + (Math.random() - 0.5) * 4,
+          );
+        }
+      }
+
+      if (ev.wreckedNow && victim) {
+        anyWreck = true;
+        this.effects.emitWreckBurst(victim.x, victim.y, victim.z);
+      }
+
+      if (
+        ev.victimId === this.onlineLocalCarId ||
+        ev.attackerId === this.onlineLocalCarId
+      ) {
+        this.shakeP1 = Math.max(this.shakeP1, ev.strength * 1.15);
+      }
+    }
+
+    if (maxImpactStrength > 0.12) {
+      this.audio.playImpact(maxImpactStrength);
+    }
+    if (anyWreck) {
+      this.audio.playWreckExplosion();
+    } else if (anyDetach) {
+      this.audio.playPartDetach();
+    }
+
+    if (
+      this.onlineLocalCarId &&
+      snapshot.nitroPickups.includes(this.onlineLocalCarId)
+    ) {
+      this.audio.playPickup();
+    }
+
+    // Sync match phase
+    if (snapshot.phase === 'playing' && this.phase === 'countdown') {
+      this.phase = 'playing';
+    } else if (snapshot.phase === 'gameover' && snapshot.summary && !this.onlineSummarySent) {
+      this.onlineSummarySent = true;
+      this.phase = 'gameover';
+      this.audio.setMusicMode('ambient');
+      this.audio.updateContinuous({
+        active: false,
+        p1SpeedRatio: 0,
+        p1Alive: false,
+        p1Boosting: false,
+        p2SpeedRatio: null,
+        p2Alive: false,
+        p2Boosting: false,
+        skidIntensity: 0,
+      });
+      this.emitHud();
+      this.callbacks.onMatchEnd(snapshot.summary);
+    }
+  }
+
   public restartMatch(): void {
     this.startMatch(this.lastConfig);
   }
 
   public returnToTitle(): void {
+    this.onlineLocalCarId = null;
+    this.onlineNetTargets.clear();
     this.audio.setMusicMode('ambient');
     this.audio.updateContinuous({
       active: false,
@@ -536,6 +784,24 @@ export class DerbyEngine {
   }
 
   public setPaused(paused: boolean): void {
+    if (this.mode === 'online') {
+      if (paused && this.phase === 'playing') {
+        this.phase = 'paused';
+        this.heldKeys.clear();
+        this.callbacks.onOnlineInput?.({
+          throttle: 0,
+          steer: 0,
+          handbrake: false,
+          nitro: false,
+        });
+        this.emitHud();
+      } else if (!paused && this.phase === 'paused') {
+        this.phase = 'playing';
+        this.emitHud();
+      }
+      return;
+    }
+
     if (paused && (this.phase === 'playing' || this.phase === 'countdown')) {
       this.phase = 'paused';
       this.heldKeys.clear();
@@ -580,8 +846,8 @@ export class DerbyEngine {
   ): void {
     const fwdX = Math.sin(car.yaw);
     const fwdZ = Math.cos(car.yaw);
-    cam.position.set(car.x - fwdX * 10.5, car.y + 4.8, car.z - fwdZ * 10.5);
-    lookTarget.set(car.x + fwdX * 4, car.y + 1.4, car.z + fwdZ * 4);
+    cam.position.set(car.x - fwdX * 6.5, car.y + 2.95, car.z - fwdZ * 6.5);
+    lookTarget.set(car.x + fwdX * 3.8, car.y + 1.25, car.z + fwdZ * 3.8);
     cam.lookAt(lookTarget);
   }
 
@@ -589,8 +855,8 @@ export class DerbyEngine {
     const k = this.heldKeys;
 
     if (slot === 0) {
-      // In 1P mode allow either WASD or Arrows for P1!
-      const allowArrows = this.mode === '1p';
+      // In 1P and Online mode allow either WASD or Arrows!
+      const allowArrows = this.mode === '1p' || this.mode === 'online';
       const up = k.has('KeyW') || (allowArrows && k.has('ArrowUp'));
       const down = k.has('KeyS') || (allowArrows && k.has('ArrowDown'));
       const left = k.has('KeyA') || (allowArrows && k.has('ArrowLeft'));
@@ -640,8 +906,8 @@ export class DerbyEngine {
     const fwdZ = Math.cos(targetCar.yaw);
     const speed = Math.hypot(targetCar.vx, targetCar.vz);
 
-    const distBack = targetCar.wrecked ? 12.5 : 9.4 + (speed / 45) * 2.1;
-    const heightUp = targetCar.wrecked ? 5.8 : 4.15 + (speed / 45) * 0.75;
+    const distBack = targetCar.wrecked ? 9.2 : 6.2 + (speed / 45) * 1.45;
+    const heightUp = targetCar.wrecked ? 4.2 : 2.85 + (speed / 45) * 0.55;
 
     _camDesired.set(
       targetCar.x - fwdX * distBack,
@@ -650,10 +916,10 @@ export class DerbyEngine {
     );
 
     // Clamp camera inside arena sightline
-    const minY = groundHeightAt(_camDesired.x, _camDesired.z) + 1.5;
+    const minY = groundHeightAt(_camDesired.x, _camDesired.z) + 1.35;
     if (_camDesired.y < minY) _camDesired.y = minY;
 
-    const dampLambda = targetCar.wrecked ? 4.5 : 8.5;
+    const dampLambda = targetCar.wrecked ? 4.5 : 9.5;
     cam.position.x = THREE.MathUtils.damp(
       cam.position.x,
       _camDesired.x,
@@ -680,9 +946,9 @@ export class DerbyEngine {
     }
 
     _camLook.set(
-      targetCar.x + fwdX * 4.5,
-      targetCar.y + 1.45,
-      targetCar.z + fwdZ * 4.5,
+      targetCar.x + fwdX * 3.8,
+      targetCar.y + 1.25,
+      targetCar.z + fwdZ * 3.8,
     );
     lookCurrent.x = THREE.MathUtils.damp(lookCurrent.x, _camLook.x, 12, dt);
     lookCurrent.y = THREE.MathUtils.damp(lookCurrent.y, _camLook.y, 12, dt);
@@ -691,8 +957,8 @@ export class DerbyEngine {
 
     // Dynamic speed & nitro FOV
     const targetFov = targetCar.isBoosting
-      ? 78
-      : 63 + THREE.MathUtils.clamp(speed / 36, 0, 1) * 7;
+      ? 69
+      : 57 + THREE.MathUtils.clamp(speed / 36, 0, 1) * 6;
     if (Math.abs(cam.fov - targetFov) > 0.05) {
       cam.fov = THREE.MathUtils.damp(cam.fov, targetFov, 7.5, dt);
       cam.updateProjectionMatrix();
@@ -704,6 +970,11 @@ export class DerbyEngine {
     const elapsed = this.clock.elapsedTime;
 
     this.arena.update(dt, elapsed);
+
+    if (this.mode === 'online' && this.phase !== 'title') {
+      this.stepOnlineFrame(dt);
+      return;
+    }
 
     if (this.phase === 'paused') {
       return;
@@ -995,6 +1266,199 @@ export class DerbyEngine {
     };
   }
 
+  private stepOnlineFrame(dt: number): void {
+    if (this.calloutTimer > 0) {
+      this.calloutTimer -= dt;
+      if (this.calloutTimer <= 0) {
+        this.callout = null;
+      }
+    }
+
+    // Send local player input over WebSocket
+    const localInput: NetInputPayload =
+      this.phase === 'playing'
+        ? this.readPlayerInput(0)
+        : { throttle: 0, steer: 0, handbrake: false, nitro: false };
+    const key = `${localInput.throttle}|${localInput.steer}|${localInput.handbrake ? 1 : 0}|${localInput.nitro ? 1 : 0}`;
+    this.inputSendAccum += dt;
+    if (key !== this.lastSentInputKey || this.inputSendAccum >= 0.045) {
+      this.lastSentInputKey = key;
+      this.inputSendAccum = 0;
+      this.callbacks.onOnlineInput?.(localInput);
+    }
+
+    // Smoothly extrapolate & damp all cars toward server targets
+    for (const car of this.cars) {
+      const target = this.onlineNetTargets.get(car.id);
+      if (target) {
+        // Light dead-reckoning prediction between 30Hz snapshots
+        target.x += target.vx * dt * 0.65;
+        target.z += target.vz * dt * 0.65;
+        target.yaw += target.angVel * dt * 0.65;
+
+        const blend = 1 - Math.exp(-20 * dt);
+        car.x += (target.x - car.x) * blend;
+        car.y += (target.y - car.y) * blend;
+        car.z += (target.z - car.z) * blend;
+        car.yaw += shortestAngleDiff(car.yaw, target.yaw) * blend;
+        car.vx = target.vx;
+        car.vy = target.vy;
+        car.vz = target.vz;
+        car.pitch = THREE.MathUtils.damp(car.pitch, target.pitch, 14, dt);
+        car.roll = THREE.MathUtils.damp(car.roll, target.roll, 14, dt);
+        car.visualSteer = THREE.MathUtils.damp(
+          car.visualSteer,
+          target.visualSteer,
+          14,
+          dt,
+        );
+      }
+
+      const fwdX = Math.sin(car.yaw);
+      const fwdZ = Math.cos(car.yaw);
+      const vForward = car.vx * fwdX + car.vz * fwdZ;
+      car.wheelSpin += (vForward / 0.42) * dt;
+
+      car.rig.root.position.set(car.x, car.y, car.z);
+      car.rig.root.rotation.set(0, car.yaw, 0);
+      car.rig.bodyPivot.position.y = car.suspOffset;
+      car.rig.bodyPivot.rotation.set(car.pitch, 0, car.roll);
+
+      const gY = groundHeightAt(car.x, car.z);
+      car.rig.contactShadow.visible = car.y - gY < 3.5;
+      const shadowFade = THREE.MathUtils.clamp(1 - (car.y - gY) / 3.5, 0.1, 1);
+      (car.rig.contactShadow.material as THREE.MeshBasicMaterial).opacity =
+        0.58 * shadowFade;
+
+      for (let wi = 0; wi < car.rig.wheels.length; wi++) {
+        const w = car.rig.wheels[wi];
+        w.pivot.rotation.y = w.isFront ? car.visualSteer : 0;
+        w.pivot.rotation.z = car.wrecked
+          ? wi % 2 === 0
+            ? 0.36
+            : -0.36
+          : car.hp < 45
+            ? (wi % 2 === 0 ? 1 : -1) * (1 - car.hp / 45) * 0.22
+            : 0;
+        w.spinMesh.rotation.x = car.wheelSpin;
+        w.pivot.position.y = w.baseY;
+      }
+
+      for (const flame of car.rig.flames) {
+        flame.visible = car.isBoosting;
+        if (car.isBoosting) {
+          flame.scale.set(1, 1, 0.85 + Math.random() * 0.45);
+        }
+      }
+
+      const braking = this.onlineBrakingByCarId.get(car.id) ?? false;
+      for (const bl of car.rig.brakeLights) {
+        (bl.material as THREE.MeshBasicMaterial).color.setHex(
+          car.wrecked ? 0x1a0808 : braking ? 0xff2b2b : 0x7f1d1d,
+        );
+      }
+
+      const totalSpeed = Math.hypot(car.vx, car.vz);
+      if (car.grounded && !car.wrecked && totalSpeed > 7) {
+        if (Math.random() < (car.isDrifting ? 0.72 : 0.25)) {
+          this.effects.emitDirtDust(
+            car.x - fwdX * 1.9,
+            car.y,
+            car.z - fwdZ * 1.9,
+            totalSpeed / 30,
+          );
+        }
+        if (car.isDrifting && Math.random() < 0.65) {
+          this.effects.addSkidMark(
+            car.x - fwdX * 0.8,
+            car.z - fwdZ * 0.8,
+            car.yaw,
+          );
+        }
+      }
+
+      if (car.wrecked) {
+        car.wreckTime += dt;
+        if (Math.random() < 0.55) {
+          this.effects.emitDamageSmoke(
+            car.x + fwdX * 0.8,
+            car.y + 0.95,
+            car.z + fwdZ * 0.8,
+            0.95,
+          );
+        }
+        if (car.wreckTime < 14 && Math.random() < 0.45) {
+          this.effects.emitFire(
+            car.x + fwdX * 1.1,
+            car.y + 0.85,
+            car.z + fwdZ * 1.1,
+            1.1,
+          );
+        }
+      } else if (car.hp < 58) {
+        const severity = 1 - car.hp / 58;
+        if (Math.random() < 0.18 + severity * 0.45) {
+          this.effects.emitDamageSmoke(
+            car.x + fwdX * 1.25,
+            car.y + 0.9,
+            car.z + fwdZ * 1.25,
+            severity,
+          );
+        }
+        if (car.hp < 24 && Math.random() < 0.35) {
+          this.effects.emitFire(
+            car.x + fwdX * 1.35,
+            car.y + 0.88,
+            car.z + fwdZ * 1.35,
+            0.75,
+          );
+        }
+      }
+    }
+
+    this.effects.update(dt);
+    this.shakeP1 = this.shakeP1 * Math.exp(-7.5 * dt);
+
+    const localCar =
+      this.cars.find((c) => c.id === this.onlineLocalCarId) ?? this.cars[0];
+    const aliveList = this.cars.filter((c) => !c.wrecked);
+
+    if (localCar) {
+      const speed = Math.hypot(localCar.vx, localCar.vz);
+      this.audio.updateContinuous({
+        active:
+          this.phase === 'playing' ||
+          this.phase === 'countdown' ||
+          this.phase === 'paused',
+        p1SpeedRatio: Math.min(1, speed / 36),
+        p1Alive: !localCar.wrecked,
+        p1Boosting: localCar.isBoosting,
+        p2SpeedRatio: null,
+        p2Alive: false,
+        p2Boosting: false,
+        skidIntensity: !localCar.wrecked && localCar.isDrifting ? 0.7 : 0,
+      });
+
+      const camTarget =
+        !localCar.wrecked || localCar.wreckTime < 2.2
+          ? localCar
+          : aliveList[0] ?? localCar;
+      this.updateChaseCamera(
+        this.camera1,
+        this.cam1LookCurrent,
+        camTarget,
+        this.shakeP1,
+        dt,
+      );
+    }
+
+    this.hudEmitAccum += dt;
+    if (this.hudEmitAccum >= 0.042) {
+      this.hudEmitAccum = 0;
+      this.emitHud();
+    }
+  }
+
   private emitHud(): void {
     const aliveList = this.cars.filter((c) => !c.wrecked);
     const p1 = this.cars.find((c) => c.playerSlot === 0);
@@ -1006,10 +1470,16 @@ export class DerbyEngine {
     this.callbacks.onHudUpdate({
       phase: this.phase,
       mode: this.mode,
-      countdownValue: Math.max(0, Math.ceil(this.countdownTimer)),
+      countdownValue:
+        this.mode === 'online'
+          ? this.onlineCountdownVal
+          : Math.max(0, Math.ceil(this.countdownTimer)),
       aliveCount: aliveList.length,
       totalCars: this.cars.length,
-      elapsedSeconds: Math.floor(this.elapsedMatchSeconds),
+      elapsedSeconds:
+        this.mode === 'online'
+          ? this.onlineElapsedSec
+          : Math.floor(this.elapsedMatchSeconds),
       players,
       callout: this.callout,
     });

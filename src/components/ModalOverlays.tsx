@@ -1,5 +1,14 @@
 import React from 'react';
-import { Play, RotateCcw, Home, Trophy, Volume2, VolumeX, Music } from 'lucide-react';
+import {
+  Play,
+  RotateCcw,
+  Home,
+  Trophy,
+  Volume2,
+  VolumeX,
+  Music,
+  Users,
+} from 'lucide-react';
 import { GameMode, MatchSummary } from '../game/types';
 
 interface PauseModalProps {
@@ -23,13 +32,22 @@ export const PauseModal: React.FC<PauseModalProps> = ({
   onToggleMute,
   onToggleMusic,
 }) => {
+  const isOnline = mode === 'online';
+
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#07090D]/80 p-4">
       <div className="w-full max-w-md bg-[#121620] border border-white/15 rounded-xl p-6 space-y-5">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="font-display font-bold text-2xl text-white">
-            Derby en Pausa
-          </h2>
+          <div>
+            <h2 className="font-display font-bold text-2xl text-white">
+              {isOnline ? 'Opciones de Sala' : 'Derby en Pausa'}
+            </h2>
+            {isOnline && (
+              <p className="text-[11px] text-amber-400">
+                La partida sigue en vivo en la arena
+              </p>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -58,13 +76,13 @@ export const PauseModal: React.FC<PauseModalProps> = ({
 
         <div className="bg-[#0B0D12] border border-white/10 rounded-lg p-3.5 text-xs text-slate-300 space-y-1.5">
           <div className="font-semibold text-slate-200">Controles</div>
-          {mode === '1p' ? (
-            <p>WASD o Flechas: Conducir · Shift: Nitro · Espacio: Freno de mano</p>
-          ) : (
+          {mode === '2p' ? (
             <>
               <p>Jugador 1: WASD + Shift (Nitro) + Espacio (Freno de mano)</p>
               <p>Jugador 2: Flechas + Enter o 0 (Nitro) + Ctrl Der. (Freno de mano)</p>
             </>
+          ) : (
+            <p>WASD o Flechas: Conducir · Shift: Nitro · Espacio: Freno de mano</p>
           )}
         </div>
 
@@ -78,25 +96,36 @@ export const PauseModal: React.FC<PauseModalProps> = ({
             <span>Continuar</span>
           </button>
 
-          <div className="grid grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={onRestart}
-              className="py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>Reiniciar</span>
-            </button>
-
+          {isOnline ? (
             <button
               type="button"
               onClick={onExitToTitle}
-              className="py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <Home className="w-4 h-4" />
-              <span>Menú</span>
+              <span>Abandonar Sala</span>
             </button>
-          </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={onRestart}
+                className="py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Reiniciar</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onExitToTitle}
+                className="py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                <Home className="w-4 h-4" />
+                <span>Menú</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -105,13 +134,19 @@ export const PauseModal: React.FC<PauseModalProps> = ({
 
 interface GameOverModalProps {
   summary: MatchSummary;
+  isOnline?: boolean;
+  isHost?: boolean;
   onRestart: () => void;
+  onReturnToLobby?: () => void;
   onExitToTitle: () => void;
 }
 
 export const GameOverModal: React.FC<GameOverModalProps> = ({
   summary,
+  isOnline,
+  isHost,
   onRestart,
+  onReturnToLobby,
   onExitToTitle,
 }) => {
   return (
@@ -200,25 +235,64 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={onRestart}
-            className="py-3 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-base rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
-          >
-            <RotateCcw className="w-4 h-4" />
-            <span>Revancha</span>
-          </button>
+        {isOnline ? (
+          <div className="space-y-2.5">
+            {isHost ? (
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={onReturnToLobby}
+                  className="py-3 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-base rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Users className="w-4 h-4" />
+                  <span>Volver a la Sala</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onExitToTitle}
+                  className="py-3 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Home className="w-4 h-4" />
+                  <span>Salir de Sala</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <div className="bg-[#0B0D12] border border-white/10 rounded-lg px-3.5 py-2.5 text-xs text-slate-300 text-center">
+                  Esperando a que el anfitrión vuelva a la sala para otra ronda...
+                </div>
+                <button
+                  type="button"
+                  onClick={onExitToTitle}
+                  className="w-full py-2.5 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Home className="w-4 h-4" />
+                  <span>Salir al Menú</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={onRestart}
+              className="py-3 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-base rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Revancha</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={onExitToTitle}
-            className="py-3 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
-          >
-            <Home className="w-4 h-4" />
-            <span>Menú Principal</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onExitToTitle}
+              className="py-3 px-4 bg-[#1B2130] hover:bg-[#252D40] text-slate-100 font-semibold text-sm rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <Home className="w-4 h-4" />
+              <span>Menú Principal</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
