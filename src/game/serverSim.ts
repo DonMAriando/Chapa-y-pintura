@@ -570,13 +570,15 @@ export function stepServerDerbySimulation(
     const reverseForce = 20 * damageSpeedMult;
 
     if (car.grounded && !car.wrecked) {
-      if (input.throttle > 0) {
-        vForward += input.throttle * accelForce * dt;
-      } else if (input.throttle < 0) {
+      const effectiveThrottle =
+        car.isBoosting && input.throttle >= 0 ? 1 : input.throttle;
+      if (effectiveThrottle > 0) {
+        vForward += effectiveThrottle * accelForce * dt;
+      } else if (effectiveThrottle < 0) {
         if (vForward > 2.5) {
           vForward -= 42 * dt;
         } else {
-          vForward += input.throttle * reverseForce * dt;
+          vForward += effectiveThrottle * reverseForce * dt;
         }
       } else {
         vForward *= Math.exp(-1.55 * dt);
