@@ -197,10 +197,11 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     emitCombined();
   };
 
-  // Evaluate which right-hand pedal zone a touch point is inside (with generous hit padding)
+  // Evaluate which right-hand pedal zone a touch point is inside (with generous hit padding & vertical slide clamping)
   const hitTestPedal = (
     clientX: number,
     clientY: number,
+    isMovingExistingPointer = false,
   ): 'gas' | 'nitro' | 'drift' | 'brake' | null => {
     const checkRect = (el: HTMLDivElement | null, pad = 10) => {
       if (!el) return false;
@@ -213,16 +214,40 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
       );
     };
 
-    // Check exact bounds first, then padded bounds for smooth thumb sliding
+    // 1. Exact bounding box checks first
     if (checkRect(nitroBtnRef.current, 0)) return 'nitro';
     if (checkRect(gasBtnRef.current, 0)) return 'gas';
-    if (checkRect(driftBtnRef.current, 0)) return 'drift';
     if (checkRect(brakeBtnRef.current, 0)) return 'brake';
+    if (checkRect(driftBtnRef.current, 0)) return 'drift';
 
+    // 2. When sliding an active thumb vertically along the 3-stage throttle column,
+    // clamp upward overshoots to NITRO and downward overshoots to REVERSA so the thumb never slips off
+    if (
+      isMovingExistingPointer &&
+      nitroBtnRef.current &&
+      gasBtnRef.current &&
+      brakeBtnRef.current
+    ) {
+      const nitroRect = nitroBtnRef.current.getBoundingClientRect();
+      const gasRect = gasBtnRef.current.getBoundingClientRect();
+      const brakeRect = brakeBtnRef.current.getBoundingClientRect();
+
+      // Check if thumb is horizontally within or right of the 3-stage column
+      if (clientX >= gasRect.left - 18 && clientX <= gasRect.right + 40) {
+        const nitroBoundaryY = (nitroRect.bottom + gasRect.top) / 2;
+        const brakeBoundaryY = (gasRect.bottom + brakeRect.top) / 2;
+
+        if (clientY < nitroBoundaryY) return 'nitro';
+        if (clientY > brakeBoundaryY) return 'brake';
+        return 'gas';
+      }
+    }
+
+    // 3. Padded bounds for initial touch and lateral slide into DERRAPE
     if (checkRect(nitroBtnRef.current, 14)) return 'nitro';
     if (checkRect(gasBtnRef.current, 14)) return 'gas';
-    if (checkRect(driftBtnRef.current, 12)) return 'drift';
-    if (checkRect(brakeBtnRef.current, 12)) return 'brake';
+    if (checkRect(brakeBtnRef.current, 14)) return 'brake';
+    if (checkRect(driftBtnRef.current, 14)) return 'drift';
 
     return null;
   };
@@ -259,7 +284,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   const handlePedalClusterPointerDown = (
     e: React.PointerEvent<HTMLDivElement>,
   ) => {
-    const hit = hitTestPedal(e.clientX, e.clientY);
+    const hit = hitTestPedal(e.clientX, e.clientY, false);
     if (!hit) return;
     e.preventDefault();
     e.stopPropagation();
@@ -273,7 +298,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   ) => {
     if (!activePedalPointersRef.current.has(e.pointerId)) return;
     e.preventDefault();
-    const hit = hitTestPedal(e.clientX, e.clientY);
+    const hit = hitTestPedal(e.clientX, e.clientY, true);
     if (hit) {
       const prev = activePedalPointersRef.current.get(e.pointerId);
       if (prev !== hit) {
@@ -368,62 +393,48 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
         </div>
       </div>
 
-      {/* RIGHT CORNER: Unified Slide-Friendly Pedals (Touch or slide thumb from ACELERAR up to NITRO) */}
+      {/* RIGHT CORNER: 3-Stage Vertical Slide Pedal (Up = NITRO, Center = ACELERAR, Down = REVERSA) + DERRAPE */}
       <div
         onPointerDown={handlePedalClusterPointerDown}
         onPointerMove={handlePedalClusterPointerMove}
         onPointerUp={handlePedalClusterPointerUp}
         onPointerCancel={handlePedalClusterPointerUp}
         onLostPointerCapture={handlePedalClusterPointerUp}
-        className="absolute right-4 bottom-4 flex items-end gap-2.5 pointer-events-auto p-2 -m-2"
+        className="absolute right-3.5 bottom-3 flex items-center gap-2.5 pointer-events-auto p-2 -m-2"
         style={{ touchAction: 'none' }}
       >
-        {/* Left Column: DERRAPE (top) & FRENO / REVERSA (bottom) */}
-        <div className="flex flex-col items-center gap-2">
-          <div
-            ref={driftBtnRef}
-            role="button"
-            aria-label="Freno de mano y derrape con aceleración"
-            className={`w-20 h-14 rounded-xl border-2 flex flex-col items-center justify-center gap-0.5 transition-transform ${
-              driftHeld
-                ? 'scale-95 bg-amber-500 border-white text-slate-950 shadow-[0_0_18px_rgba(245,158,11,0.5)]'
-                : 'bg-[#0E1117]/80 border-amber-400/50 text-amber-300'
+        {/* Left Button: DERRAPE (Slide left or tap to drift with power) */}
+        <div
+          ref={driftBtnRef}
+          role="button"
+          aria-label="Freno de mano y derrape con aceleración"
+          className={`w-20 h-20 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-transform ${
+            driftHeld
+              ? 'scale-95 bg-amber-500 border-white text-slate-950 shadow-[0_0_20px_rgba(245,158,11,0.55)]'
+              : 'bg-[#0E1117]/82 border-amber-400/55 text-amber-300'
+          }`}
+        >
+          <Disc className="w-5 h-5" />
+          <span className="font-display font-bold text-xs tracking-wide leading-none">
+            DERRAPE
+          </span>
+          <span
+            className={`text-[8px] font-mono-num font-bold uppercase leading-none ${
+              driftHeld ? 'text-slate-900' : 'text-amber-200/70'
             }`}
           >
-            <Disc className="w-4 h-4" />
-            <span className="font-display font-bold text-[11px] tracking-wide leading-none">
-              DERRAPE
-            </span>
-          </div>
-
-          <div
-            ref={brakeBtnRef}
-            role="button"
-            aria-label="Freno y reversa"
-            className={`w-20 h-20 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-transform ${
-              brakeHeld
-                ? 'scale-95 bg-red-500 border-white text-white shadow-[0_0_18px_rgba(239,68,68,0.5)]'
-                : 'bg-[#0E1117]/82 border-red-400/50 text-red-300'
-            }`}
-          >
-            <ArrowDown className="w-5 h-5" />
-            <span className="font-display font-bold text-[11px] tracking-wide leading-none">
-              FRENO
-            </span>
-            <span className="text-[9px] font-medium opacity-80 leading-none">
-              REVERSA
-            </span>
-          </div>
+            ◄ Deslizá
+          </span>
         </div>
 
-        {/* Right Column: Connected Dual-Stage Pedal (ACELERAR bottom + Slide/Tap NITRO+ACEL top) */}
-        <div className="flex flex-col items-center">
+        {/* Right Column: Connected 3-Stage Vertical Pedal (NITRO ▲ / ACELERAR / ▼ REVERSA) */}
+        <div className="flex flex-col items-center shadow-2xl">
           {/* Top Stage: NITRO + ACELERADOR INTEGRADO */}
           <div
             ref={nitroBtnRef}
             role="button"
             aria-label="Acelerar con Nitro"
-            className={`w-24 h-16 rounded-t-2xl border-2 flex flex-col items-center justify-center gap-0.5 transition-transform ${
+            className={`w-24 h-14 rounded-t-2xl border-2 flex flex-col items-center justify-center gap-0.5 transition-transform ${
               nitroHeld
                 ? 'bg-cyan-400 border-white text-slate-950 shadow-[0_0_24px_rgba(34,211,238,0.75)]'
                 : 'bg-[#0E1117]/85 border-cyan-400/65 text-cyan-300'
@@ -436,7 +447,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
               </span>
             </div>
             <span
-              className={`text-[9px] font-semibold tracking-tight leading-none ${
+              className={`text-[8px] font-semibold tracking-tight leading-none ${
                 nitroHeld ? 'text-slate-900' : 'text-cyan-200/80'
               }`}
             >
@@ -444,35 +455,74 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
             </span>
           </div>
 
-          {/* Slide Bridge Indicator */}
+          {/* Upper Slide Bridge Indicator (ACELERAR -> NITRO) */}
           <div
             className={`w-24 py-0.5 text-center text-[8px] font-mono-num font-bold tracking-wider uppercase border-x-2 ${
               nitroHeld
                 ? 'bg-cyan-300 border-white text-slate-950'
                 : gasHeld
-                  ? 'bg-emerald-500/30 border-emerald-400/65 text-emerald-200'
+                  ? 'bg-emerald-500/35 border-emerald-400/65 text-emerald-200'
                   : 'bg-[#0E1117]/90 border-white/15 text-slate-400'
             }`}
           >
-            ▲ Deslizá a Turbo
+            ▲ Deslizá Turbo
           </div>
 
-          {/* Bottom Stage: ACELERAR */}
+          {/* Center Stage: ACELERAR (Main Thumb Resting Pedal) */}
           <div
             ref={gasBtnRef}
             role="button"
             aria-label="Acelerar"
-            className={`w-24 h-24 rounded-b-2xl border-2 flex flex-col items-center justify-center gap-1 transition-transform ${
+            className={`w-24 h-20 border-x-2 border-y flex flex-col items-center justify-center gap-0.5 transition-transform ${
               gasHeld && !nitroHeld
                 ? 'bg-emerald-400 border-white text-slate-950 shadow-[0_0_24px_rgba(52,211,153,0.6)]'
                 : nitroHeld
                   ? 'bg-emerald-500/80 border-white text-slate-950'
-                  : 'bg-[#0E1117]/85 border-emerald-400/65 text-emerald-300'
+                  : 'bg-[#0E1117]/88 border-emerald-400/65 text-emerald-300'
             }`}
           >
-            <ArrowUp className="w-6 h-6 stroke-[2.5]" />
+            <ArrowUp className="w-5 h-5 stroke-[2.5]" />
             <span className="font-display font-bold text-sm tracking-wide leading-none">
               ACELERAR
+            </span>
+          </div>
+
+          {/* Lower Slide Bridge Indicator (ACELERAR -> REVERSA) */}
+          <div
+            className={`w-24 py-0.5 text-center text-[8px] font-mono-num font-bold tracking-wider uppercase border-x-2 ${
+              brakeHeld
+                ? 'bg-red-400 border-white text-slate-950'
+                : gasHeld
+                  ? 'bg-red-500/25 border-red-400/50 text-red-200'
+                  : 'bg-[#0E1117]/90 border-white/15 text-slate-400'
+            }`}
+          >
+            ▼ Deslizá Atrás
+          </div>
+
+          {/* Bottom Stage: FRENO / MARCHA ATRÁS (REVERSA) */}
+          <div
+            ref={brakeBtnRef}
+            role="button"
+            aria-label="Freno y marcha atrás"
+            className={`w-24 h-14 rounded-b-2xl border-2 flex flex-col items-center justify-center gap-0.5 transition-transform ${
+              brakeHeld
+                ? 'bg-red-500 border-white text-white shadow-[0_0_22px_rgba(239,68,68,0.65)]'
+                : 'bg-[#0E1117]/85 border-red-400/60 text-red-300'
+            }`}
+          >
+            <div className="flex items-center gap-1">
+              <ArrowDown className="w-4 h-4 stroke-[2.5]" />
+              <span className="font-display font-bold text-xs tracking-wide leading-none">
+                REVERSA
+              </span>
+            </div>
+            <span
+              className={`text-[8px] font-semibold tracking-tight leading-none ${
+                brakeHeld ? 'text-white/90' : 'text-red-200/80'
+              }`}
+            >
+              FRENO / ATRÁS
             </span>
           </div>
         </div>
