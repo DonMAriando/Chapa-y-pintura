@@ -402,7 +402,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({
         <p className="text-xs text-slate-300/90 font-medium tracking-wide">
           {config.mode === '2p'
             ? 'J1: WASD + Shift Nitro + Espacio Derrape  |  J2: Flechas + Enter/0 Nitro + Ctrl Der. Derrape  ·  Esc Pausa'
-            : 'WASD o Flechas Conducir · Shift Nitro · Espacio Freno de mano · Esc Pausa'}
+            : 'PC: WASD o Flechas + Shift Nitro + Espacio Derrape  ·  Celular: Joystick flotante + Pedales táctiles'}
         </p>
       </div>
     </div>

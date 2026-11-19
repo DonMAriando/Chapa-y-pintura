@@ -7,9 +7,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { GameHud } from './components/GameHud';
 import { GameOverModal, PauseModal } from './components/ModalOverlays';
 import { TitleOverlay } from './components/TitleOverlay';
+import {
+  detectTouchDevice,
+  LandscapePromptBanner,
+  requestMobileLandscapeFullscreen,
+  TouchControls,
+} from './components/TouchControls';
 import { DerbyEngine } from './game/engine';
 import { RoomState, RoomSummary } from './game/multiplayerTypes';
 import { DerbyNetClient, NetConnectionStatus } from './game/netClient';
+import { CarInput } from './game/physics';
 import {
   CarColorId,
   GameHudSnapshot,
@@ -45,6 +52,17 @@ export default function App() {
   const [musicMuted, setMusicMuted] = useState(false);
   const [contextLost, setContextLost] = useState(false);
 
+  // Mobile touch & orientation state
+  const [isTouchDevice, setIsTouchDevice] = useState<boolean>(() =>
+    detectTouchDevice(),
+  );
+  const [touchControlsEnabled, setTouchControlsEnabled] = useState<boolean>(
+    () => detectTouchDevice(),
+  );
+  const [isPortraitMobile, setIsPortraitMobile] = useState<boolean>(false);
+  const [landscapePromptDismissed, setLandscapePromptDismissed] =
+    useState<boolean>(false);
+
   // Multiplayer room state
   const [netStatus, setNetStatus] =
     useState<NetConnectionStatus>('disconnected');
@@ -54,6 +72,40 @@ export default function App() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
   const [currentRoom, setCurrentRoom] = useState<RoomState | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const checkViewportAndTouch = () => {
+      const touch = detectTouchDevice();
+      setIsTouchDevice(touch);
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const portrait = (touch || w < 900) && h > w;
+      setIsPortraitMobile(portrait);
+      if (!portrait) {
+        setLandscapePromptDismissed(false);
+      }
+    };
+
+    const onFirstTouch = () => {
+      setIsTouchDevice(true);
+      setTouchControlsEnabled(true);
+      checkViewportAndTouch();
+    };
+
+    checkViewportAndTouch();
+    window.addEventListener('resize', checkViewportAndTouch);
+    window.addEventListener('orientationchange', checkViewportAndTouch);
+    window.addEventListener('touchstart', onFirstTouch, {
+      passive: true,
+      once: true,
+    });
+
+    return () => {
+      window.removeEventListener('resize', checkViewportAndTouch);
+      window.removeEventListener('orientationchange', checkViewportAndTouch);
+      window.removeEventListener('touchstart', onFirstTouch);
+    };
+  }, []);
 
   useEffect(() => {
     const mount = canvasMountRef.current;
@@ -136,9 +188,12 @@ export default function App() {
 
   const handleStart = useCallback(() => {
     if (config.mode === 'online') return;
+    if (isTouchDevice) {
+      void requestMobileLandscapeFullscreen();
+    }
     setSummary(null);
     engineRef.current?.startMatch(config);
-  }, [config]);
+  }, [config, isTouchDevice]);
 
   const handleRestart = useCallback(() => {
     setSummary(null);
@@ -176,6 +231,20 @@ export default function App() {
       engineRef.current?.setMusicMuted(next);
       return next;
     });
+  }, []);
+
+  const handleToggleTouchControls = useCallback(() => {
+    setTouchControlsEnabled((prev) => {
+      const next = !prev;
+      if (!next) {
+        engineRef.current?.resetTouchInput();
+      }
+      return next;
+    });
+  }, []);
+
+  const handleTouchInput = useCallback((input: Partial<CarInput>) => {
+    engineRef.current?.setTouchInput(input);
   }, []);
 
   // Multiplayer room callbacks
@@ -234,8 +303,11 @@ export default function App() {
 
   const handleStartRoomMatch = useCallback(() => {
     setRoomError(null);
+    if (isTouchDevice) {
+      void requestMobileLandscapeFullscreen();
+    }
     netClientRef.current?.startMatch();
-  }, []);
+  }, [isTouchDevice]);
 
   const handleReturnToRoomLobby = useCallback(() => {
     setSummary(null);
@@ -245,6 +317,8 @@ export default function App() {
   const isHostInRoom = Boolean(
     currentRoom && playerId && currentRoom.hostPlayerId === playerId,
   );
+  const inActiveMatch =
+    hud.phase === 'countdown' || hud.phase === 'playing';
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#0B0D12]">
@@ -254,6 +328,13 @@ export default function App() {
         className="absolute inset-0 w-full h-full"
         aria-label="Arena 3D de Destruction Derby"
       />
+
+      {/* Mobile Landscape Prompt Banner when phone is held vertically */}
+      {isPortraitMobile && !landscapePromptDismissed && (
+        <LandscapePromptBanner
+          onDismiss={() => setLandscapePromptDismissed(true)}
+        />
+      )}
 
       {contextLost && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B0D12]/95 text-center p-6">
@@ -298,15 +379,21 @@ export default function App() {
         />
       )}
 
-      {(hud.phase === 'countdown' || hud.phase === 'playing') && (
+      {inActiveMatch && (
         <GameHud
           snapshot={hud}
           muted={muted}
           musicMuted={musicMuted}
+          touchControlsEnabled={touchControlsEnabled}
           onPause={handlePause}
           onToggleMute={handleToggleMute}
           onToggleMusic={handleToggleMusic}
+          onToggleTouchControls={handleToggleTouchControls}
         />
+      )}
+
+      {inActiveMatch && touchControlsEnabled && hud.mode !== '2p' && (
+        <TouchControls onUpdateInput={handleTouchInput} />
       )}
 
       {hud.phase === 'paused' && (

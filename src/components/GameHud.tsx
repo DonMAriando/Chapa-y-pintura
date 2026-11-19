@@ -1,5 +1,5 @@
 import React from 'react';
-import { Music, Pause, Volume2, VolumeX } from 'lucide-react';
+import { Gamepad2, Music, Pause, Volume2, VolumeX } from 'lucide-react';
 import {
   CarDamageZones,
   GameHudSnapshot,
@@ -10,9 +10,11 @@ interface GameHudProps {
   snapshot: GameHudSnapshot;
   muted: boolean;
   musicMuted: boolean;
+  touchControlsEnabled: boolean;
   onPause: () => void;
   onToggleMute: () => void;
   onToggleMusic: () => void;
+  onToggleTouchControls: () => void;
 }
 
 function zoneColor(damage: number): string {
@@ -187,11 +189,14 @@ export const GameHud: React.FC<GameHudProps> = ({
   snapshot,
   muted,
   musicMuted,
+  touchControlsEnabled,
   onPause,
   onToggleMute,
   onToggleMusic,
+  onToggleTouchControls,
 }) => {
   const is2P = snapshot.mode === '2p';
+  const showTouchLayout = touchControlsEnabled && !is2P;
   const p1 = snapshot.players[0];
   const p2 = snapshot.players[1];
 
@@ -202,9 +207,15 @@ export const GameHud: React.FC<GameHudProps> = ({
         <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-[2px] bg-white/30" />
       )}
 
-      {/* Top Center Compact Match Header */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 pointer-events-auto">
-        <div className="bg-[#0E1117]/88 border border-white/14 rounded-lg px-3.5 py-1.5 flex items-center gap-3 text-xs font-mono-num text-slate-200">
+      {/* Top Match Header */}
+      <div
+        className={`absolute top-3 flex items-center gap-1.5 sm:gap-2 pointer-events-auto ${
+          showTouchLayout
+            ? 'right-3 lg:left-1/2 lg:-translate-x-1/2 lg:right-auto'
+            : 'left-1/2 -translate-x-1/2'
+        }`}
+      >
+        <div className="bg-[#0E1117]/88 border border-white/14 rounded-lg px-3 py-1.5 flex items-center gap-2.5 text-xs font-mono-num text-slate-200">
           <span>
             EN PIE{' '}
             <strong className="text-amber-400">
@@ -216,6 +227,28 @@ export const GameHud: React.FC<GameHudProps> = ({
           </span>
           <span>{formatTime(snapshot.elapsedSeconds)}</span>
         </div>
+
+        {!is2P && (
+          <button
+            type="button"
+            onClick={onToggleTouchControls}
+            className="p-2 bg-[#0E1117]/88 border border-white/14 rounded-lg text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            aria-label={
+              touchControlsEnabled
+                ? 'Ocultar controles táctiles'
+                : 'Mostrar controles táctiles'
+            }
+            title={
+              touchControlsEnabled
+                ? 'Ocultar controles táctiles'
+                : 'Mostrar controles táctiles'
+            }
+          >
+            <Gamepad2
+              className={`w-4 h-4 ${touchControlsEnabled ? 'text-amber-400' : 'text-slate-500'}`}
+            />
+          </button>
+        )}
 
         <button
           type="button"
@@ -317,8 +350,18 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* Perimeter Player Telemetry Clusters */}
       {p1 && (
-        <div className="absolute bottom-4 left-4">
-          <PlayerTelemetryCluster player={p1} align="left" compact={is2P} />
+        <div
+          className={
+            showTouchLayout
+              ? 'absolute top-3 left-3'
+              : 'absolute bottom-4 left-4'
+          }
+        >
+          <PlayerTelemetryCluster
+            player={p1}
+            align="left"
+            compact={is2P || showTouchLayout}
+          />
         </div>
       )}
 
@@ -328,8 +371,8 @@ export const GameHud: React.FC<GameHudProps> = ({
         </div>
       )}
 
-      {/* Subtle single-line controls reminder at bottom center in 1P */}
-      {!is2P && (
+      {/* Subtle single-line controls reminder at bottom center in 1P desktop */}
+      {!is2P && !showTouchLayout && (
         <div className="hidden lg:block absolute bottom-4 left-1/2 -translate-x-1/2 bg-[#0E1117]/75 border border-white/10 rounded-md px-3 py-1 text-[11px] text-slate-300 whitespace-nowrap">
           WASD / Flechas Conducir · Shift Nitro · Espacio Derrape
         </div>

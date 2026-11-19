@@ -126,6 +126,12 @@ export class DerbyEngine {
   private nextCalloutId = 1;
 
   private heldKeys = new Set<string>();
+  private touchInput: CarInput = {
+    throttle: 0,
+    steer: 0,
+    handbrake: false,
+    nitro: false,
+  };
   private frameId = 0;
   private clock = new THREE.Clock();
   private hudEmitAccum = 0;
@@ -769,6 +775,7 @@ export class DerbyEngine {
   public returnToTitle(): void {
     this.onlineLocalCarId = null;
     this.onlineNetTargets.clear();
+    this.resetTouchInput();
     this.audio.setMusicMode('ambient');
     this.audio.updateContinuous({
       active: false,
@@ -783,11 +790,35 @@ export class DerbyEngine {
     this.setupAttractDemo();
   }
 
+  public setTouchInput(input: Partial<CarInput>): void {
+    this.audio.unlock();
+    if (input.throttle !== undefined) {
+      this.touchInput.throttle = THREE.MathUtils.clamp(input.throttle, -1, 1);
+    }
+    if (input.steer !== undefined) {
+      this.touchInput.steer = THREE.MathUtils.clamp(input.steer, -1, 1);
+    }
+    if (input.handbrake !== undefined) {
+      this.touchInput.handbrake = input.handbrake;
+    }
+    if (input.nitro !== undefined) {
+      this.touchInput.nitro = input.nitro;
+    }
+  }
+
+  public resetTouchInput(): void {
+    this.touchInput.throttle = 0;
+    this.touchInput.steer = 0;
+    this.touchInput.handbrake = false;
+    this.touchInput.nitro = false;
+  }
+
   public setPaused(paused: boolean): void {
     if (this.mode === 'online') {
       if (paused && this.phase === 'playing') {
         this.phase = 'paused';
         this.heldKeys.clear();
+        this.resetTouchInput();
         this.callbacks.onOnlineInput?.({
           throttle: 0,
           steer: 0,
@@ -805,6 +836,7 @@ export class DerbyEngine {
     if (paused && (this.phase === 'playing' || this.phase === 'countdown')) {
       this.phase = 'paused';
       this.heldKeys.clear();
+      this.resetTouchInput();
       this.audio.setMusicMode('ambient');
       this.audio.updateContinuous({
         active: false,
@@ -855,7 +887,7 @@ export class DerbyEngine {
     const k = this.heldKeys;
 
     if (slot === 0) {
-      // In 1P and Online mode allow either WASD or Arrows!
+      // In 1P and Online mode allow either WASD or Arrows, merged seamlessly with mobile touch controls!
       const allowArrows = this.mode === '1p' || this.mode === 'online';
       const up = k.has('KeyW') || (allowArrows && k.has('ArrowUp'));
       const down = k.has('KeyS') || (allowArrows && k.has('ArrowDown'));
@@ -867,11 +899,22 @@ export class DerbyEngine {
         (allowArrows && (k.has('ShiftRight') || k.has('Enter')));
       const handbrake = k.has('Space');
 
+      const kbThrottle = (up ? 1 : 0) - (down ? 1 : 0);
+      const kbSteer = (left ? 1 : 0) - (right ? 1 : 0);
+
       return {
-        throttle: (up ? 1 : 0) - (down ? 1 : 0),
-        steer: (left ? 1 : 0) - (right ? 1 : 0),
-        handbrake,
-        nitro,
+        throttle: THREE.MathUtils.clamp(
+          kbThrottle !== 0 ? kbThrottle : this.touchInput.throttle,
+          -1,
+          1,
+        ),
+        steer: THREE.MathUtils.clamp(
+          kbSteer !== 0 ? kbSteer : this.touchInput.steer,
+          -1,
+          1,
+        ),
+        handbrake: handbrake || this.touchInput.handbrake,
+        nitro: nitro || this.touchInput.nitro,
       };
     }
 

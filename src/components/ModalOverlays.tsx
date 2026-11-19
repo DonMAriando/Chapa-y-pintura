@@ -82,7 +82,10 @@ export const PauseModal: React.FC<PauseModalProps> = ({
               <p>Jugador 2: Flechas + Enter o 0 (Nitro) + Ctrl Der. (Freno de mano)</p>
             </>
           ) : (
-            <p>WASD o Flechas: Conducir · Shift: Nitro · Espacio: Freno de mano</p>
+            <>
+              <p>PC: WASD o Flechas · Shift: Nitro · Espacio: Freno de mano</p>
+              <p>Celular: Joystick flotante izq. (Dirección) + Pedales der. (Acelerar, Freno, Nitro, Derrape)</p>
+            </>
           )}
         </div>
 
